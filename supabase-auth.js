@@ -46,6 +46,19 @@ async function mirrorAuthToSupabase(dir) {
   }
 }
 
+async function clearRemoteAuth() {
+  if (!enabled()) return;
+  try {
+    const res = await fetch(`${SUPA_URL}/rest/v1/wa_auth_files?filename=neq.__none__`, {
+      method: 'DELETE',
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+    });
+    if (!res.ok) throw new Error(`auth mirror clear failed: ${res.status}`);
+  } catch (e) {
+    console.error('auth mirror clear error:', e.message);
+  }
+}
+
 async function restoreAuthFromSupabase(dir) {
   if (!enabled()) return false;
   try {
@@ -69,4 +82,4 @@ function scheduleMirror(dir, delayMs = 10000) {
   mirrorTimer = setTimeout(() => mirrorAuthToSupabase(dir), delayMs);
 }
 
-module.exports = { mirrorAuthToSupabase, restoreAuthFromSupabase, scheduleMirror };
+module.exports = { mirrorAuthToSupabase, restoreAuthFromSupabase, scheduleMirror, clearRemoteAuth };
