@@ -119,6 +119,7 @@ async function startSocket() {
       if (code === DisconnectReason.loggedOut) {
         console.log('logged out — clearing auth, waiting for new pairing');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
+        authMirror.clearRemoteAuth();
         latestPairingCode = null;
         connectionState = 'logged-out';
         setTimeout(startSocket, 5000);
@@ -270,7 +271,7 @@ const server = http.createServer(async (req, res) => {
     // Mint a fresh code on demand: pairing codes expire within minutes,
     // so a stored code from boot time is usually stale by the time the
     // user is ready to type it.
-    if (sock && !sock.authState.creds.registered) {
+    if (sock && !sock.authState.creds.registered && connectionState !== 'logged-out') {
       try {
         latestPairingCode = await sock.requestPairingCode(PAIRING_PHONE);
         connectionState = 'awaiting-pairing';
