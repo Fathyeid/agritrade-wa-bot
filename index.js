@@ -262,15 +262,9 @@ async function handleMessage(msg) {
       await enqueueSend(jid, M.ASK_LIMIT_REACHED);
       return;
     }
-    const brief = await data.getTodayBrief().catch(() => null);
-    const answer = await data.askGemini(body, brief).catch(() => null);
-    if (answer) {
-      await data.recordQuestion(phone, body).catch(() => {});
-      await enqueueSend(jid, answer.slice(0, 1500));
-    } else {
-      await data.recordQuestion(phone, body).catch(() => {});
-      await enqueueSend(jid, M.ASK_RECEIVED);
-    }
+    const answer = await data.answerQuestion(body).catch(() => 'المصادر مش متاحة دلوقتي، جرب كمان شوية.');
+    await data.recordQuestion(phone, body).catch(() => {});
+    await enqueueSend(jid, answer.slice(0, 3000));
     return;
   }
 
@@ -283,6 +277,15 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+  if (url.pathname === '/answer-test') {
+    if (url.searchParams.get('key') !== ADMIN_SECRET) { res.writeHead(403); res.end('forbidden'); return; }
+    try {
+      const answer = await data.answerQuestion((url.searchParams.get('q') || '').slice(0, 500));
+      res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ answer }));
+    } catch (e) { res.writeHead(503); res.end('sources unavailable'); }
     return;
   }
   if (url.pathname === '/backup-status') {
