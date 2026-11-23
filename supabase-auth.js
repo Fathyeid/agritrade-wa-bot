@@ -7,6 +7,10 @@ const path = require('path');
 const SUPA_URL = process.env.SUPABASE_URL || '';
 const SUPA_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
 
+let backupStatus = { lastSuccessAt: null, fileCount: 0, lastError: null };
+const hasSession = (c) => Boolean(c && c.me && c.me.id && c.account);
+function getBackupStatus() { return { enabled: enabled(), ...backupStatus }; }
+
 function enabled() {
   return Boolean(SUPA_URL && SUPA_KEY);
 }
@@ -37,13 +41,16 @@ async function mirrorAuthToSupabase(dir) {
   if (!enabled()) return;
   try {
     const credsPath = path.join(dir, 'creds.json');
-    if (!fs.existsSync(credsPath) || !JSON.parse(fs.readFileSync(credsPath, 'utf8')).registered) return;
+    if (!fs.existsSync(credsPath) || !hasSession(JSON.parse(fs.readFileSync(credsPath, 'utf8')))) return;
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
     for (const f of files) {
       const buf = fs.readFileSync(path.join(dir, f));
       await upsertFile(f, buf.toString('base64'));
     }
+    backupStatus = { lastSuccessAt: new Date().toISOString(), fileCount: files.length, lastError: null };
+    console.log('auth mirror saved:', files.length, 'files');
   } catch (e) {
+    backupStatus.lastError = e.message;
     console.error('auth mirror save error:', e.message);
   }
 }
@@ -68,7 +75,7 @@ async function restoreAuthFromSupabase(dir) {
     const rows = await listRemoteFiles();
     if (!rows || !rows.length) return false;
     const credsRow = rows.find(r => r.filename === 'creds.json');
-    if (!credsRow || !JSON.parse(Buffer.from(credsRow.content, 'base64').toString()).registered) return false;
+    if (!credsRow || !hasSession(JSON.parse(Buffer.from(credsRow.content, 'base64').toString()))) return false;
     fs.mkdirSync(dir, { recursive: true });
     for (const row of rows) {
       fs.writeFileSync(path.join(dir, row.filename), Buffer.from(row.content, 'base64'));
@@ -87,4 +94,4 @@ function scheduleMirror(dir, delayMs = 10000) {
   mirrorTimer = setTimeout(() => mirrorAuthToSupabase(dir), delayMs);
 }
 
-module.exports = { mirrorAuthToSupabase, restoreAuthFromSupabase, scheduleMirror, clearRemoteAuth };
+module.exports = { mirrorAuthToSupabase, restoreAuthFromSupabase, scheduleMirror, clearRemoteAuth, getBackupStatus };
