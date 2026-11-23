@@ -36,6 +36,8 @@ async function listRemoteFiles() {
 async function mirrorAuthToSupabase(dir) {
   if (!enabled()) return;
   try {
+    const credsPath = path.join(dir, 'creds.json');
+    if (!fs.existsSync(credsPath) || !JSON.parse(fs.readFileSync(credsPath, 'utf8')).registered) return;
     const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
     for (const f of files) {
       const buf = fs.readFileSync(path.join(dir, f));
@@ -47,6 +49,7 @@ async function mirrorAuthToSupabase(dir) {
 }
 
 async function clearRemoteAuth() {
+  if (mirrorTimer) clearTimeout(mirrorTimer);
   if (!enabled()) return;
   try {
     const res = await fetch(`${SUPA_URL}/rest/v1/wa_auth_files?filename=neq.__none__`, {
@@ -64,6 +67,8 @@ async function restoreAuthFromSupabase(dir) {
   try {
     const rows = await listRemoteFiles();
     if (!rows || !rows.length) return false;
+    const credsRow = rows.find(r => r.filename === 'creds.json');
+    if (!credsRow || !JSON.parse(Buffer.from(credsRow.content, 'base64').toString()).registered) return false;
     fs.mkdirSync(dir, { recursive: true });
     for (const row of rows) {
       fs.writeFileSync(path.join(dir, row.filename), Buffer.from(row.content, 'base64'));
