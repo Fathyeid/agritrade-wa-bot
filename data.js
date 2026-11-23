@@ -72,7 +72,7 @@ async function getPrices() {
   if (!rows || !rows.length) return null;
 
   const physical = rows.filter(
-    (r) => (r.basis_type || '').toUpperCase() !== 'OTHER' && (r.price_usd_t || r.price_local)
+    (r) => (r.basis_type || '').toUpperCase() !== 'OTHER' && r.price_usd_t
   );
   if (!physical.length) return null;
 
@@ -177,7 +177,7 @@ async function answerQuestion(question) {
     const priceGroups = groups.filter(g => !g.some(t => ['سعر','اسعار','price','prices','بكام'].includes(t)));
     if (!priceGroups.length) return 'حدد السلعة والبلد عشان أعرض سعر منشور بتاريخ واضح.';
     const rows = await sb('pp_prices?select=commodity,origin,destination,price_usd_t,price_local,currency,incoterm,basis_type,published_date&order=published_date.desc&limit=150').catch(()=>[]);
-    const found = (rows||[]).filter(r => r.published_date && r.basis_type && r.basis_type.toUpperCase()!=='OTHER' && ['CIF','CFR','FOB','EXW','FCA','CPT','DAP','DDP'].includes((r.incoterm||'').toUpperCase()) && (r.price_usd_t||r.price_local) && overlap([r.commodity,r.origin,r.destination].join(' '),priceGroups)===priceGroups.length).slice(0,3);
+    const found = (rows||[]).filter(r => r.published_date && r.basis_type && r.basis_type.toUpperCase()!=='OTHER' && ['CIF','CFR','FOB','EXW','FCA','CPT','DAP','DDP'].includes((r.incoterm||'').toUpperCase()) && r.price_usd_t && overlap([r.commodity,r.origin,r.destination].join(' '),priceGroups)===priceGroups.length).slice(0,3);
     if(!found.length) return UNKNOWN_ANSWER;
     return 'أسعار منشورة في قاعدة أسعار أجري تريد، مش عرض بيع حالي:\n\n'+found.map(r=>[r.commodity,[r.origin,r.destination].filter(Boolean).join(' ← '),(r.price_usd_t ? '$'+r.price_usd_t+'/طن' : r.price_local+' '+r.currency)+' '+r.incoterm,'تاريخ السعر: '+r.published_date+(r.published_date<daysAgoISO(3)?' ⚠️ سعر قديم':'')].join('\n')).join('\n\n');
   }
