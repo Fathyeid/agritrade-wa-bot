@@ -37,22 +37,36 @@ async function listRemoteFiles() {
   return res.json();
 }
 
+let mirrorInFlight = null;
 async function mirrorAuthToSupabase(dir) {
   if (!enabled()) return;
-  try {
-    const credsPath = path.join(dir, 'creds.json');
-    if (!fs.existsSync(credsPath) || !hasSession(JSON.parse(fs.readFileSync(credsPath, 'utf8')))) return;
-    const files = fs.readdirSync(dir).filter((f) => f.endsWith('.json'));
-    for (const f of files) {
-      const buf = fs.readFileSync(path.join(dir, f));
-      await upsertFile(f, buf.toString('base64'));
+  if (mirrorInFlight) return mirrorInFlight;
+  mirrorInFlight = (async () => {
+    try {
+      const credsPath = path.join(dir, 'creds.json');
+      if (!fs.existsSync(credsPath) || !hasSession(JSON.parse(fs.readFileSync(credsPath, 'utf8')))) return;
+      const rows = [];
+      for (const filename of fs.readdirSync(dir).filter(f => f.endsWith('.json'))) {
+        try {
+          const content = fs.readFileSync(path.join(dir, filename)).toString('base64');
+          rows.push({ filename, content, updated_at: new Date().toISOString() });
+        } catch (e) { if (e.code !== 'ENOENT') throw e; }
+      }
+      const res = await fetch(`${SUPA_URL}/rest/v1/wa_auth_files`, {
+        method: 'POST',
+        signal: AbortSignal.timeout(20000),
+        headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}`, 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' },
+        body: JSON.stringify(rows),
+      });
+      if (!res.ok) throw new Error(`auth mirror bulk upsert failed: ${res.status}`);
+      backupStatus = { lastSuccessAt: new Date().toISOString(), fileCount: rows.length, lastError: null };
+      console.log('auth mirror saved:', rows.length, 'files');
+    } catch (e) {
+      backupStatus.lastError = e.message;
+      console.error('auth mirror save error:', e.message);
     }
-    backupStatus = { lastSuccessAt: new Date().toISOString(), fileCount: files.length, lastError: null };
-    console.log('auth mirror saved:', files.length, 'files');
-  } catch (e) {
-    backupStatus.lastError = e.message;
-    console.error('auth mirror save error:', e.message);
-  }
+  })();
+  try { await mirrorInFlight; } finally { mirrorInFlight = null; }
 }
 
 async function clearRemoteAuth() {
