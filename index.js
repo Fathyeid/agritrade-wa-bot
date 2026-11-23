@@ -84,6 +84,7 @@ async function startSocket() {
   }
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  connectionState = 'connecting';
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
 
@@ -123,7 +124,7 @@ async function startSocket() {
       if (code === DisconnectReason.loggedOut) {
         console.log('logged out — clearing auth, waiting for new pairing');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        authMirror.clearRemoteAuth();
+        await authMirror.clearRemoteAuth();
         latestPairingCode = null;
         connectionState = 'logged-out';
         setTimeout(startSocket, 5000);
@@ -132,19 +133,6 @@ async function startSocket() {
       }
     }
   });
-
-  // Request a pairing code once, when unregistered.
-  if (!state.creds.registered && PAIRING_PHONE) {
-    setTimeout(async () => {
-      try {
-        latestPairingCode = await sock.requestPairingCode(PAIRING_PHONE);
-        connectionState = 'awaiting-pairing';
-        console.log('PAIRING CODE for', PAIRING_PHONE, '=', latestPairingCode);
-      } catch (e) {
-        console.error('pairing code request failed:', e.message);
-      }
-    }, 4000);
-  }
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
@@ -170,7 +158,9 @@ async function handleMessage(msg) {
     '';
   if (!text.trim()) return;
 
-  const phone = normalizePhone(jid);
+  const phoneJid = jid.endsWith('@s.whatsapp.net') ? jid : msg.key.remoteJidAlt;
+  if (!phoneJid || !phoneJid.endsWith('@s.whatsapp.net')) return;
+  const phone = normalizePhone(phoneJid);
   const name = msg.pushName || '';
   const body = text.trim();
   const lower = body.toLowerCase();
@@ -189,7 +179,7 @@ async function handleMessage(msg) {
       const subs = await data.listActiveSubscribers();
       let sent = 0;
       for (const s of subs.slice(0, MAX_BROADCAST)) {
-        if (s.phone === phone) continue;
+        if (s.phone === phone || IGNORE_PHONES.includes(s.phone)) continue;
         await enqueueSend(`${s.phone}@s.whatsapp.net`, payload);
         sent++;
         await sleep(rand(3000, 7000)); // slow, human-paced broadcast
@@ -209,14 +199,14 @@ async function handleMessage(msg) {
   }
 
   // ---- Unsubscribe ----
-  if (['إلغاء', 'الغاء', 'ايقاف', 'إيقاف', 'stop', 'unsubscribe'].some((k) => lower.includes(k))) {
+  if (['إلغاء', 'الغاء', 'ايقاف', 'إيقاف', 'stop', 'unsubscribe'].some((k) => lower === k)) {
     await data.upsertSubscriber(phone, name, false).catch(() => {});
     await enqueueSend(jid, M.UNSUBSCRIBED);
     return;
   }
 
   // ---- Subscribe ----
-  if (['اشتراك', 'إشتراك', 'ابدا', 'أبدا', 'start'].some((k) => lower === k || lower.startsWith(k + ' '))) {
+  if (['اشتراك', 'إشتراك', 'start'].some((k) => lower === k)) {
     const existing = await data.getSubscriber(phone).catch(() => null);
     await data.upsertSubscriber(phone, name, true).catch(() => {});
     await enqueueSend(jid, existing && existing.active ? M.ALREADY_SUBSCRIBED : M.WELCOME_SUBSCRIBED);
