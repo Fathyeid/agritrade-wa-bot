@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: agritrade-wa-bot
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    healthCheckPath: /health
+    envVars:
+      - key: PAIRING_PHONE
+        value: "201290013088"
+      - key: ADMIN_PHONE
+        value: "201032287622"
+      - key: SUPABASE_URL
+        value: "https://movodjdwghharkfrgqtv.supabase.co"
+        value: "prices"
+      - key: MAX_BROADCAST
+        value: "150"
+      # Set these in the dashboard (secrets, never in the repo):
+      # SUPABASE_SERVICE_ROLE_KEY, ADMIN_SECRET, GEMINI_API_KEY (optional)
