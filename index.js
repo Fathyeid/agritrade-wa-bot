@@ -28,6 +28,10 @@ const DRY_RUN = process.env.DRY_RUN === '1';
 const PORT = parseInt(process.env.PORT || '10000', 10);
 
 const MAX_BROADCAST = parseInt(process.env.MAX_BROADCAST || '150', 10);
+const IGNORE_PHONES = (process.env.IGNORE_PHONES || '')
+  .split(',')
+  .map((p) => p.replace(/\D/g, ''))
+  .filter(Boolean);
 const MAX_QUESTIONS_PER_DAY = 20;
 
 let sock = null;
@@ -172,6 +176,11 @@ async function handleMessage(msg) {
   const lower = body.toLowerCase();
   const isAdmin = ADMIN_PHONE && phone.endsWith(ADMIN_PHONE.slice(-10));
 
+  // Hard-ignore list (never read or reply): Instinct's own number and anything
+  // else the owner flags. This is the owner's personal WhatsApp, so silence is
+  // the default for ordinary chats.
+  if (IGNORE_PHONES.some((p) => phone.endsWith(p.slice(-10)))) return;
+
   // ---- Admin commands ----
   if (isAdmin) {
     if (body.startsWith('بث ') || body.startsWith('بث:') || body.startsWith('بث:')) {
@@ -214,6 +223,14 @@ async function handleMessage(msg) {
     return;
   }
 
+  // ---- Subscriber gate: beyond subscribe/unsubscribe keywords and admin
+  // commands, only whitelisted active subscribers get replies. Everyone else
+  // (ordinary personal chats on the owner's own number) gets silence.
+  if (!isAdmin) {
+    const sub = await data.getSubscriber(phone).catch(() => null);
+    if (!sub || !sub.active) return;
+  }
+
   // ---- Menu options ----
   if (body === '1' || body === '١' || lower.includes('موجز')) {
     const brief = await data.getTodayBrief().catch(() => null);
@@ -251,7 +268,7 @@ async function handleMessage(msg) {
     return;
   }
 
-  await enqueueSend(jid, M.UNKNOWN);
+  if (isAdmin) await enqueueSend(jid, M.UNKNOWN);
 }
 
 // ---- Tiny HTTP server: health, status, pairing code ----
