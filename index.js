@@ -86,6 +86,11 @@ async function startSocket() {
   }
 
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  const setKeys = state.keys.set.bind(state.keys);
+  state.keys.set = async (updates) => {
+    await setKeys(updates);
+    authMirror.scheduleMirror(AUTH_DIR, 2000);
+  };
   connectionState = 'connecting';
   const { version } = await fetchLatestBaileysVersion();
   const logger = pino({ level: process.env.LOG_LEVEL || 'warn' });
@@ -119,6 +124,7 @@ async function startSocket() {
     if (connection === 'open') {
       connectionState = 'connected';
       latestQR = null;
+      await saveCreds();
       console.log('WhatsApp connected as', normalizePhone(sock.user?.id));
       await authMirror.mirrorAuthToSupabase(AUTH_DIR);
     }
@@ -273,6 +279,15 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+  if (url.pathname === '/backup-status') {
+    if (url.searchParams.get('key') !== ADMIN_SECRET) {
+      res.writeHead(403); res.end('forbidden'); return;
+    }
+    if (connectionState === 'connected') await authMirror.mirrorAuthToSupabase(AUTH_DIR);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ state: connectionState, ...authMirror.getBackupStatus() }));
     return;
   }
   if (url.pathname === '/qr') {
