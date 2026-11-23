@@ -43,7 +43,7 @@ function cairoDate(d) {
 // Today's brief: newest visible reports from the reports table (known schema).
 async function getTodayBrief() {
   const rows = await sb(
-    'reports?select=subject,body_text,received_at&app_visible=eq.true&order=received_at.desc&limit=3'
+    'reports?select=subject,body_text,received_at&app_visible=eq.true&sender=in.(AgriTrade%20Research,Agri%20Trade%20Pro%20Research)&order=received_at.desc&limit=3'
   );
   if (!rows || !rows.length) return null;
   const parts = rows.map((r) => {
@@ -146,33 +146,58 @@ async function countTodayQuestions(phone) {
   return rows ? rows.length : 0;
 }
 
-// Optional: answer with Gemini free tier.
-async function askGemini(question, context) {
-  const key = process.env.GEMINI_API_KEY || '';
-  if (!key) return null;
-  const model = process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const body = {
-    system_instruction: {
-      parts: [
-        {
-          text:
-            'انت مساعد خبير في سوق الحبوب المصري (قمح، ذرة، صويا، أسعار CIF وCBOT). ' +
-            'رد بالعامية المصرية، باختصار ووضوح، ولو مش متأكد من رقم قول إن ده تقدير. ' +
-            (context ? `آخر موجز عندك للسياق:\n${context.slice(0, 1500)}` : ''),
-        },
-      ],
-    },
-    contents: [{ role: 'user', parts: [{ text: question }] }],
-    generationConfig: { maxOutputTokens: 500 },
-  };
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,
-    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
-  );
-  if (!res.ok) return null;
-  const data = await res.json();
-  const text = data?.candidates?.[0]?.content?.parts?.map((p) => p.text).join('') || '';
-  return text.trim() || null;
+// No paid model or external AI disclosure: extract only matching published text.
+const UNKNOWN_ANSWER = 'مش لاقي إجابة موثقة على سؤالك في التقارير والأخبار المنشورة عندنا. جرّب تحدد السلعة أو البلد أو التاريخ. مش هخمن رقم أو معلومة.';
+function normalizeSearch(text) {
+  return String(text || '').toLowerCase().normalize('NFKC')
+    .replace(/[إأآ]/g, 'ا').replace(/ى/g, 'ي').replace(/ة/g, 'ه')
+    .replace(/[\u064B-\u065F\u0670\u0640]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ');
+}
+const ALIASES = [
+  ['قمح','wheat'], ['ذره','ذرة','corn','maize'], ['صويا','soy','soybean','soybeans'],
+  ['مصر','egypt','egyptian'], ['روسيا','روسي','russia','russian'],
+  ['اوكرانيا','اوكراني','ukraine','ukrainian'], ['برازيل','brazil','brazilian'],
+  ['ارجنتين','argentina','argentine'], ['زيت','oil'], ['شحن','freight'],
+  ['اسعار','سعر','price','prices'], ['تصدير','صادرات','export','exports'],
+  ['استيراد','واردات','import','imports'], ['انتاج','production'], ['مخزون','stocks','inventory'],
+].map(g => g.map(normalizeSearch));
+function queryGroups(question) {
+  const stop = new Set(['ايه','ما','هي','هو','عن','في','من','الي','علي','هل','و','النهارده','اليوم','اخر','اخبار','the','what','is','of','and','in','latest']);
+  const tokens = normalizeSearch(question).split(' ').filter(t => t.length > 1 && !stop.has(t));
+  return tokens.map(t => ALIASES.find(g => g.includes(t) || g.includes(t.replace(/^ال/, ''))) || [t]);
+}
+function overlap(text, groups) {
+  const words = new Set(normalizeSearch(text).split(' '));
+  return groups.reduce((n,g) => n + (g.some(w => words.has(w) || words.has('ال'+w)) ? 1 : 0), 0);
+}
+async function answerQuestion(question) {
+  const groups = queryGroups(question);
+  if (!groups.length) return UNKNOWN_ANSWER;
+  const loads = await Promise.allSettled([
+    sb('reports?select=subject,body_text,received_at&app_visible=eq.true&sender=in.(AgriTrade%20Research,Agri%20Trade%20Pro%20Research)&order=received_at.desc&limit=80'),
+    sb('market_news?select=title,title_ar,summary,summary_ar,canonical_url,published_at&is_public=eq.true&verification_status=eq.verified&order=published_at.desc&limit=100'),
+    sb('agritrade_daily_reports?select=title,content_markdown,report_date&status=in.(published,sent)&order=report_date.desc&limit=30'),
+  ]);
+  const rows = loads.map(r => r.status === 'fulfilled' ? r.value || [] : []);
+  if (loads.every(r => r.status === 'rejected')) return 'المصادر المنشورة مش متاحة دلوقتي. جرب تاني بعد شوية، مش هخمن الإجابة.';
+  const docs = [
+    ...rows[0].map(r=>({title:r.subject,text:r.body_text,date:r.received_at})),
+    ...rows[1].map(r=>({title:r.title_ar||r.title,text:r.summary_ar||r.summary,date:r.published_at,url:r.canonical_url})),
+    ...rows[2].map(r=>({title:r.title,text:r.content_markdown,date:r.report_date})),
+  ];
+  const candidates = [];
+  for (const d of docs) {
+    const sentences = String(d.text||'').replace(/<[^>]*>/g,' ').split(/\n+|(?<=[.!?؟])\s+/).map(t=>t.trim()).filter(t=>t.length>25 && t.length<1800);
+    for (const text of sentences) {
+      const score=overlap(text,groups);
+      if (score >= Math.min(2,groups.length)) candidates.push({...d,text,score});
+    }
+  }
+  candidates.sort((a,b)=>b.score-a.score || String(b.date||'').localeCompare(String(a.date||'')));
+  const picked=[]; const seen=new Set();
+  for(const c of candidates) { if(seen.has(c.title)) continue; seen.add(c.title); picked.push(c); if(picked.length===2) break; }
+  if (!picked.length) return UNKNOWN_ANSWER;
+  return 'ده النص المرتبط بسؤالك من منشوراتنا، نقل مباشر مش تحليل أو توقع جديد:\n\n'+picked.map(d=>`المصدر: ${d.title}\nتاريخ النشر: ${d.date ? String(d.date).slice(0,10) : 'غير متاح'}\n«${d.text.slice(0,700)}${d.text.length>700?'…':''}»${d.url?'\n'+d.url:''}`).join('\n\n')+'\n\nالمعلومات بتاريخ المصدر، مش بالضرورة أسعار أو أحداث النهارده.';
 }
 
 module.exports = {
@@ -185,5 +210,7 @@ module.exports = {
   countActiveSubscribers,
   recordQuestion,
   countTodayQuestions,
-  askGemini,
+  answerQuestion,
+  queryGroups,
+  overlap,
 };
