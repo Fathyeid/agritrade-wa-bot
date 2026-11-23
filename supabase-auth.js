@@ -30,11 +30,18 @@ async function upsertFile(filename, contentB64) {
 }
 
 async function listRemoteFiles() {
-  const res = await fetch(`${SUPA_URL}/rest/v1/wa_auth_files?select=filename,content`, {
-    headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
-  });
-  if (!res.ok) throw new Error(`auth mirror read failed: ${res.status}`);
-  return res.json();
+  const rows = [];
+  for (let offset = 0; offset < 20000; offset += 500) {
+    const res = await fetch(`${SUPA_URL}/rest/v1/wa_auth_files?select=filename,content&order=filename.asc&limit=500&offset=${offset}`, {
+      headers: { apikey: SUPA_KEY, Authorization: `Bearer ${SUPA_KEY}` },
+      signal: AbortSignal.timeout(20000),
+    });
+    if (!res.ok) throw new Error(`auth mirror read failed: ${res.status}`);
+    const page = await res.json();
+    rows.push(...page);
+    if (page.length < 500) return rows;
+  }
+  throw new Error('auth mirror exceeds safe restore size');
 }
 
 let mirrorInFlight = null;
