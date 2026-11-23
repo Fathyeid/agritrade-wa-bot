@@ -36,6 +36,8 @@ const MAX_QUESTIONS_PER_DAY = 20;
 
 let sock = null;
 let latestPairingCode = null;
+let latestQR = null;
+let qrUpdatedAt = null;
 let connectionState = 'init';
 const sendQueue = [];
 let sending = false;
@@ -108,18 +110,22 @@ async function startSocket() {
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (qr) {
+      latestQR = qr;
+      qrUpdatedAt = Date.now();
       // QR fallback: log it so it can be scanned from the host's console if needed.
       console.log('QR received (use pairing code instead):', qr.slice(0, 40) + '...');
       connectionState = 'awaiting-pairing';
     }
     if (connection === 'open') {
       connectionState = 'connected';
+      latestQR = null;
       console.log('WhatsApp connected as', normalizePhone(sock.user?.id));
       await authMirror.mirrorAuthToSupabase(AUTH_DIR);
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode;
       connectionState = 'closed';
+      latestQR = null;
       console.log('connection closed, code:', code);
       if (code === DisconnectReason.loggedOut) {
         console.log('logged out — clearing auth, waiting for new pairing');
@@ -267,6 +273,14 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/health') {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('ok');
+    return;
+  }
+  if (url.pathname === '/qr') {
+    if (url.searchParams.get('key') !== ADMIN_SECRET) {
+      res.writeHead(403); res.end('forbidden'); return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({ state: connectionState, qr: latestQR, updatedAt: qrUpdatedAt }));
     return;
   }
   if (url.pathname === '/pairing-code') {
