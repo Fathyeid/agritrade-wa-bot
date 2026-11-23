@@ -172,6 +172,15 @@ function overlap(text, groups) {
 }
 async function answerQuestion(question) {
   const groups = queryGroups(question);
+  const priceQuestion = /(?:سعر|اسعار|بكام|price)/.test(normalizeSearch(question));
+  if (priceQuestion) {
+    const priceGroups = groups.filter(g => !g.some(t => ['سعر','اسعار','price','prices','بكام'].includes(t)));
+    if (!priceGroups.length) return 'حدد السلعة والبلد عشان أعرض سعر منشور بتاريخ واضح.';
+    const rows = await sb('pp_prices?select=commodity,origin,destination,price_usd_t,price_local,currency,incoterm,basis_type,published_date&order=published_date.desc&limit=150').catch(()=>[]);
+    const found = (rows||[]).filter(r => r.published_date && r.basis_type && r.basis_type.toUpperCase()!=='OTHER' && ['CIF','CFR','FOB','EXW','FCA','CPT','DAP','DDP'].includes((r.incoterm||'').toUpperCase()) && (r.price_usd_t||r.price_local) && overlap([r.commodity,r.origin,r.destination].join(' '),priceGroups)===priceGroups.length).slice(0,3);
+    if(!found.length) return UNKNOWN_ANSWER;
+    return 'أسعار منشورة في قاعدة أسعار أجري تريد، مش عرض بيع حالي:\n\n'+found.map(r=>[r.commodity,[r.origin,r.destination].filter(Boolean).join(' ← '),(r.price_usd_t ? '$'+r.price_usd_t+'/طن' : r.price_local+' '+r.currency)+' '+r.incoterm,'تاريخ السعر: '+r.published_date+(r.published_date<daysAgoISO(3)?' ⚠️ سعر قديم':'')].join('\n')).join('\n\n');
+  }
   if (!groups.length) return UNKNOWN_ANSWER;
   const loads = await Promise.allSettled([
     sb('reports?select=subject,body_text,received_at&app_visible=eq.true&sender=in.(AgriTrade%20Research,Agri%20Trade%20Pro%20Research)&order=received_at.desc&limit=80'),
@@ -190,7 +199,7 @@ async function answerQuestion(question) {
     const sentences = String(d.text||'').replace(/<[^>]*>/g,' ').split(/\n+|(?<=[.!?؟])\s+/).map(t=>t.trim()).filter(t=>t.length>25 && t.length<1800);
     for (const text of sentences) {
       const score=overlap(text,groups);
-      if (score >= Math.min(2,groups.length)) candidates.push({...d,text,score});
+      if (score === groups.length) candidates.push({...d,text,score});
     }
   }
   candidates.sort((a,b)=>b.score-a.score || String(b.date||'').localeCompare(String(a.date||'')));
