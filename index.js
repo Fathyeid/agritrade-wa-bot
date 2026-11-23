@@ -76,7 +76,7 @@ async function pumpQueue() {
 }
 
 function normalizePhone(jid) {
-  return (jid || '').split('@')[0].replace(/\D/g, '');
+  return (jid || '').split('@')[0].split(':')[0].replace(/\D/g, '');
 }
 
 async function startSocket() {
@@ -170,13 +170,17 @@ async function handleMessage(msg) {
     '';
   if (!text.trim()) return;
 
-  const phoneJid = jid.endsWith('@s.whatsapp.net') ? jid : msg.key.remoteJidAlt;
+  let phoneJid = jid.endsWith('@s.whatsapp.net') ? jid : msg.key.remoteJidAlt;
+  if ((!phoneJid || !phoneJid.endsWith('@s.whatsapp.net')) && jid.endsWith('@lid')) {
+    phoneJid = await sock.signalRepository.lidMapping.getPNForLID(jid).catch(() => null);
+  }
   if (!phoneJid || !phoneJid.endsWith('@s.whatsapp.net')) return;
   const phone = normalizePhone(phoneJid);
   const name = msg.pushName || '';
   const body = text.trim();
   const lower = body.toLowerCase();
-  const isAdmin = ADMIN_PHONE && phone.endsWith(ADMIN_PHONE.slice(-10));
+  const command = lower.normalize('NFKC').replace(/[إأآ]/g, 'ا').replace(/[\u064B-\u065F\u0670\u0640]/g, '').replace(/[\u200e\u200f]/g, '').trim();
+  const isAdmin = Boolean(ADMIN_PHONE && phone === ADMIN_PHONE);
 
   // Hard-ignore list (never read or reply): Instinct's own number and anything
   // else the owner flags. This is the owner's personal WhatsApp, so silence is
@@ -199,7 +203,7 @@ async function handleMessage(msg) {
       await enqueueSend(jid, M.BROADCAST_DONE(sent));
       return;
     }
-    if (body === 'احصائيات' || body === 'عدد') {
+    if (command === 'احصائيات' || command === 'عدد') {
       const n = await data.countActiveSubscribers();
       await enqueueSend(jid, `عدد المشتركين النشطين: ${n}`);
       return;
